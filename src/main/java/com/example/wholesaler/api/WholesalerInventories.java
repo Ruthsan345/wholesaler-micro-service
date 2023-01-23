@@ -10,7 +10,7 @@ import java.util.ArrayList;
 public interface WholesalerInventories {
    String addProductToWholesaler(WholesalerInventory wholesalerInventory);
 
-   ResponseEntity<String> updateProductToWholesaler(int inventoryId, int quantity, int price);
+   ResponseEntity<String> updateProductToWholesaler(int inventoryId, int quantity);
 
    ArrayList<WholesalerInventory> getAllProductsByWholesalerId(int warehouseId);
 

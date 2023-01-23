@@ -25,8 +25,8 @@ public class WholesalerInventoryController {
     }
 
     @PutMapping("/updateProductToWholesaler")
-    public ResponseEntity<String> updateProductToWholesaler(@RequestParam int inventoryId, @RequestParam int quantity , @RequestParam int price) {
-        return wholesalersInventoryOp.updateProductToWholesaler(inventoryId,quantity,price);
+    public ResponseEntity<String> updateProductToWholesaler(@RequestParam int inventoryId, @RequestParam int quantity) {
+        return wholesalersInventoryOp.updateProductToWholesaler(inventoryId,quantity);
     }
 
 

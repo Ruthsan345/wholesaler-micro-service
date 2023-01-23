@@ -22,10 +22,10 @@ public class WholesalerInventoryOperation implements WholesalerInventories {
     }
 
     @Override
-    public ResponseEntity<String> updateProductToWholesaler(int inventoryId, int quantity, int price) {
+    public ResponseEntity<String> updateProductToWholesaler(int inventoryId, int quantity) {
         WholesalerInventory wholesalerInventory = wholesalerInventoryRepository.findById(inventoryId);
         wholesalerInventory.setStock(quantity);
-        wholesalerInventory.setPrice(price);
+//        wholesalerInventory.setPrice(price);
         wholesalerInventoryRepository.save(wholesalerInventory);
         return new ResponseEntity<>( "Updated Product to wholesaler", HttpStatus.OK);
 
