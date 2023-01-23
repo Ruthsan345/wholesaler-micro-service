@@ -2,10 +2,14 @@ package com.example.wholesaler.service.impl;
 
 
 import com.example.wholesaler.api.Wholesalers;
-import com.example.wholesaler.exception.UserDefinedException;
-import com.example.wholesaler.model.Product;
-import com.example.wholesaler.model.Wholesaler;
+import com.example.wholesaler.kafka.KafkaPublishService;
+import com.example.wholesaler.model.*;
+import com.example.wholesaler.repository.WholesalerInventoryRepository;
+import com.example.wholesaler.repository.WholesalerRepository;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -13,57 +17,70 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
+import org.apache.commons.lang3.RandomStringUtils;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+
 
 @Service
 public class WholesalerOperation implements Wholesalers {
     @Autowired
     RestTemplate restTemplate;
+
+    @Autowired
+    WholesalerRepository wholesalerRepository;
+
+    @Autowired
+    WholesalerInventoryOperation wholesalerInventoryOperation;
+
+    @Autowired
+    KafkaPublishService kafkaPublishService;
+
+
     public static ArrayList<Wholesaler> wholesalerList = new ArrayList<>();
 
     @Override
-    public Wholesaler displayWholesaler(int wholesaleId){
-        try{
-            if (wholesalerList.isEmpty()){throw new UserDefinedException("\n Sorry !!No wholesaler to Display\n\n");}
-            for(Wholesaler n : wholesalerList){
-                    if(n.getWholesale_id() ==wholesaleId){
-                        return n;
-                }
-                System.out.println("\n <--------------------------------------------------> \n");
-            }
-        }catch(UserDefinedException ud){
-            System.out.println(ud.getMessage());
-        }
-        return null;
+    @Cacheable(value="Wholesaler", key="#wholeSalerId")
+
+    public Wholesaler displayWholesaler(int wholeSalerId) {
+        return wholesalerRepository.findById(wholeSalerId);
+    }
+
+    @Override
+    public ArrayList<Wholesaler> displayAllProduct() {
+        return (ArrayList<Wholesaler>) wholesalerRepository.findAll();
     }
 
 
     @Override
     public String addWholesaler(Wholesaler wholesaler) {
-        wholesalerList.add(wholesaler);
+        wholesalerRepository.save(wholesaler);
         return "Successfully added the wholesaler";
     }
 
     @Override
+    @CacheEvict(value="Wholesaler", key="#wholeSalerId")
+
     public String deleteWholesaler(int wholeSalerId) {
-        if (wholesalerList.isEmpty()){return ("\n Sorry !!No wholesaler to delete\n\n");}
-        int pos = 0;
-        int trigger=-1;
-        for(Wholesaler n : wholesalerList){
-            if(n.getWholesale_id() ==wholeSalerId){
-                trigger=pos;
-            }pos++;
-        }
-        if(trigger>=0){
-            wholesalerList.remove(trigger);
-            return("delete Successfull");
-        }else return("\n Sorry !!wholesale id not found enter an another id\n\n");
+        wholesalerRepository.deleteById(wholeSalerId);
+
+        return("delete Successfull");
     }
 
+    //    @Override
+    //    public ResponseEntity<String> updateProductToWholesaler(int wholesalerId,String wholesalerName, String wholesalerMailId,String wholesalerMobileNo) {
+    //        Wholesaler wholesaler = wholesalerRepository.findById(wholesalerId);
+    //        wholesaler.setWarehouse_name(wholesalerName);
+    //        wholesaler.setContact_mail(wholesalerMailId);
+    //        wholesaler.setContact_mobile_no(wholesalerMobileNo);;
+    //        wholesalerRepository.save(wholesaler);
+    //        return new ResponseEntity<>( "Updated the wholesaler data", HttpStatus.OK);
+    //
+    //    }
+
     @Override
-    public String allocateProductToWholesaler(int wholesalerId, int proid, int quantity, int price) {
+    public String allocateProductToWholesaler(int wholesalerId,int warehouseId, int proid, int quantity,int payingAmount, int price) {
 
             boolean wholesalerNotFound = true;
             boolean productNotFound = true;
@@ -71,56 +88,70 @@ public class WholesalerOperation implements Wholesalers {
             headers.setAccept(Arrays.asList(MediaType.APPLICATION_JSON));
             HttpEntity<String> entity = new HttpEntity<String>(headers);
 
-            if (wholesalerList.isEmpty()){return("\n Sorry !!No wholesalers to allocate\n\n");}
+//            if (wholesalerList.isEmpty()){return("\n Sorry !!No wholesalers to allocate\n\n");}
             if (quantity<0){return ("\n Please enter a valid number for quantity.\n\n");}
 
+            String url = UriComponentsBuilder.fromHttpUrl("http://localhost:8000/warehouse/api/getAllProductsByWarehouseId/"+warehouseId)
+                    .toUriString();
 
-            String url = UriComponentsBuilder.fromHttpUrl("http://localhost:8000/product/api/getProduct")
-                    .queryParam("productId",proid).toUriString();
+             ArrayList<WarehouseInventory> listOfWarehouseInventory = restTemplate.exchange(url, HttpMethod.GET, entity,new ParameterizedTypeReference<ArrayList<WarehouseInventory>>(){}).getBody();
 
-             Product pro = restTemplate.exchange(url, HttpMethod.GET, entity, Product.class).getBody();
+             for(WarehouseInventory warehouseInventory: listOfWarehouseInventory) {
+                 if(warehouseInventory.getProduct_id() ==proid) {
+                     productNotFound= false;
+                     if (warehouseInventory.getStock() < quantity) {
+                         return ("\n Stocks are low. kindly try a small number\n\n");
+                     }
 
-            if (pro.getStock()< quantity){return("\n Stocks are low. kindly try a small number\n\n");}
+                      url = UriComponentsBuilder.fromHttpUrl("http://localhost:8000/product/api/getProductById/"+proid)
+                             .toUriString();
 
-            for(Wholesaler n : wholesalerList){
-                if(n.getWholesale_id() == wholesalerId){
-                    wholesalerNotFound =false;
-                        if(pro.proId== proid){
-                            productNotFound= false;
-                            int billAmount =  pro.price*quantity;
-//                            float discountPercentage = pro.discount.get(pro.discount.floorKey(quantity))/100f;
-                            float discountPercentage=0;
-                            float totalAfterOffer= billAmount - billAmount*discountPercentage;
-                            float gstAmount = totalAfterOffer*(18/100f);
-                            float grandBillAmount= totalAfterOffer+gstAmount;
+                     Product pro = restTemplate.exchange(url, HttpMethod.GET, entity, Product.class).getBody();
 
-                            System.out.print("\ngrand bill amount :: "+grandBillAmount);
-                            Product pros = new Product(pro.proId, pro.proName, quantity, price,pro.gstPercentage);
-                            n.setWholesale_products(pros);
-                            quantity=pro.stock-quantity;
+                     int billAmount =  warehouseInventory.getStock()*quantity;
+                     float discountPercentage=0;
+                     float totalAfterOffer= billAmount - billAmount*discountPercentage;
+                     float gstAmount = totalAfterOffer*(pro.gstPercentage/100f);
+                     float grandBillAmount= totalAfterOffer+gstAmount;
 
 
-                             url = UriComponentsBuilder.fromHttpUrl("http://localhost:8000/product/api/updateProduct")
-                                    .queryParam("productId",proid)
-                                    .queryParam("quantity",quantity)
-                                    .toUriString();
-                             restTemplate.exchange(url, HttpMethod.PUT, entity, String.class).getBody();
+                     WholesalerInventory wholesalerInventory = new WholesalerInventory(1, warehouseId, wholesalerId, proid, quantity,price);
+
+                     wholesalerInventoryOperation.addProductToWholesaler(wholesalerInventory);
 
 
+                     int reducedQuantity = warehouseInventory.getStock()-quantity;
 
-                            System.out.println("\n\n\n\t\t\t<------Bill Amount----->");
-                            System.out.println("\n\t\tProduct :: "+ pro.proName + "\n\t\tQuantity :: "+quantity);
-//                            System.out.print("\n\t\tBill amount :: "+billAmount+"\n\t\tOffer percentage :: "+pro.discount.get(pro.discount.floorKey(quantity))+"%");
-                            System.out.print("\n\t\tGST Percentage :: 18%\n\t\tGST Amount :: "+gstAmount);
-                            System.out.print("\n\t\tGrand bill amount :: "+grandBillAmount);
 
-                            return("Sucessfully Purchased");
+                     url = UriComponentsBuilder.fromHttpUrl("http://localhost:8000/warehouse/api/updateProductToWareHouse?inventoryId="+warehouseInventory.getId()+"&quantity="+reducedQuantity)
+                             .toUriString();
 
-                    }
+                      restTemplate.exchange(url, HttpMethod.PUT, entity, String.class).getBody();
 
-                }
-            }
-            if(wholesalerNotFound){ return("\n Sorry !!Wholesaler not found!\n\n"); }
+
+                     System.out.print("\ngrand bill amount :: "+grandBillAmount);
+                     Product pros = new Product(1,pro.getProId(), pro.getProName(), price,pro.getGstPercentage());
+
+
+                     Bill bill = new Bill(true,wholesalerId, "A HUB", quantity, billAmount,Math.round(discountPercentage), gstAmount, grandBillAmount,pros);
+
+                     String billid = RandomStringUtils.randomAlphanumeric(10);
+
+                     long millis=System.currentTimeMillis();
+                     java.sql.Date date=new java.sql.Date(millis);
+
+                     Float due_amount = grandBillAmount-payingAmount;
+                     if (due_amount<=0){ due_amount=0f; }
+
+                     Finance finance = new Finance(1,billid,"WHOLESALER",wholesalerId, warehouseId,proid, grandBillAmount, due_amount, date);
+                     kafkaPublishService.sendBillingInformation(bill);
+                     kafkaPublishService.sendFinanceInformation(finance);
+
+                     return ("Succesfully Purchased. \n Your bill id for reference is : "+billid);
+
+                 }
+
+             }
             if(productNotFound){ return ("\n Sorry !!Products not found!\n\n"); }
 
             System.out.println("\n <--------------------------------------------------> \n");
@@ -129,19 +160,25 @@ public class WholesalerOperation implements Wholesalers {
     }
 
     @Override
-    public String updateWholesalerProduct(int wholesalerId, int proid, int quantity) {
-        boolean flag =false;
-        for(Wholesaler whole: wholesalerList){
-            if(whole.getWholesale_id() == wholesalerId){
-                for(Product pro: whole.getWholesale_products()){
-                    pro.setStock(quantity);
-                    flag=true;
-                }
-            }
-        }
-        if(flag)return("update wholesaler Product detail updated Successfully");
-        else return("no products or wholesaler found");
+    public String payPendingDue(String billId, int amount) {
+        kafkaPublishService.sendDueInformation(billId,amount);
+        return ("Kafka request published ");
     }
+//
+//    @Override
+//    public String updateWholesalerProduct(int wholesalerId, int proid, int quantity) {
+//        boolean flag =false;
+//        for(Wholesaler whole: wholesalerList){
+//            if(whole.getWholesale_id() == wholesalerId){
+//                for(Product pro: whole.getWholesale_products()){
+//                    pro.setStock(quantity);
+//                    flag=true;
+//                }
+//            }
+//        }
+//        if(flag)return("update wholesaler Product detail updated Successfully");
+//        else return("no products or wholesaler found");
+//    }
 
 
 }
